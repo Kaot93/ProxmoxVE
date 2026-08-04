@@ -4,7 +4,11 @@ set -Eeuo pipefail
 
 PAPERLESS_VERSION="v2.20.15"
 PAPERLESS_SHA256="e9bfb6ec0425e5e72a85f64811829167b6c22753f83e325b95d5068393073bf6"
-PAPERLESS_URL="https://github.com/paperless-ngx/paperless-ngx/releases/download/${PAPERLESS_VERSION}/paperless-ngx-${PAPERLESS_VERSION}.tar.xz"
+PAPERLESS_URLS=(
+  "https://github.com/paperless-ngx/paperless-ngx/releases/download/${PAPERLESS_VERSION}/paperless-ngx-${PAPERLESS_VERSION}.tar.xz"
+  "https://downloads.sourceforge.net/project/paperless-ngx.mirror/${PAPERLESS_VERSION}/paperless-ngx-${PAPERLESS_VERSION}.tar.xz"
+  "https://fossies.org/linux/misc/paperless-ngx-${PAPERLESS_VERSION}.tar.xz"
+)
 INSTALL_DIR="/opt/paperless"
 DATA_DIR="/opt/paperless_data"
 DB_NAME="paperlessdb"
@@ -93,8 +97,35 @@ uv python install 3.13
 
 log "Paperless-ngx ${PAPERLESS_VERSION} herunterladen und Prüfsumme kontrollieren"
 ARCHIVE="$WORK_DIR/paperless.tar.xz"
-curl -fL --retry 3 --retry-delay 2 "$PAPERLESS_URL" -o "$ARCHIVE"
-echo "${PAPERLESS_SHA256}  ${ARCHIVE}" | sha256sum --check --status || fail "Die SHA-256-Prüfsumme des Paperless-Archivs stimmt nicht."
+DOWNLOAD_OK=false
+for PAPERLESS_URL in "${PAPERLESS_URLS[@]}"; do
+  for IP_MODE in auto ipv4; do
+    rm -f "$ARCHIVE"
+    CURL_IP_ARGS=()
+    [[ "$IP_MODE" == "ipv4" ]] && CURL_IP_ARGS=(-4)
+    printf 'Versuche %s (%s) ...\n' "$PAPERLESS_URL" "$IP_MODE"
+    if curl "${CURL_IP_ARGS[@]}" -fL \
+      --connect-timeout 20 \
+      --max-time 1800 \
+      --retry 4 \
+      --retry-delay 3 \
+      --retry-all-errors \
+      "$PAPERLESS_URL" -o "$ARCHIVE"; then
+      if echo "${PAPERLESS_SHA256}  ${ARCHIVE}" | sha256sum --check --status; then
+        DOWNLOAD_OK=true
+        break 2
+      fi
+      printf 'Warnung: Download von %s hat eine falsche Prüfsumme.\n' "$PAPERLESS_URL" >&2
+    fi
+  done
+done
+
+if [[ "$DOWNLOAD_OK" != "true" ]]; then
+  printf '\nNetzwerkdiagnose:\n' >&2
+  getent ahosts github.com >&2 || true
+  ip route >&2 || true
+  fail "Das geprüfte Paperless-Archiv konnte über keine Downloadquelle geladen werden. Prüfe DNS, Gateway, Firewall und Internetzugang des LXC."
+fi
 
 EXTRACT_DIR="$WORK_DIR/extracted"
 mkdir -p "$EXTRACT_DIR"
